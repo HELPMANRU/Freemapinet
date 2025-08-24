@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Интерактивная карта</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f4f4f4;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        #map-container {
+            position: relative;
+            height: 500px;
+            width: 100%;
+            border: 1px solid #ccc;
+            overflow: hidden;
+            margin-bottom: 20px;
+            background: #e6f0fa;
+        }
+        #map {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+        .marker {
+            position: absolute;
+            width: 20px;
+            height: 20px;
+            background: red;
+            border-radius: 50%;
+            border: 2px solid white;
+            cursor: pointer;
+            transform: translate(-50%, -50%);
+        }
+        .marker:hover::after {
+            content: attr(data-info);
+            position: absolute;
+            background: white;
+            padding: 8px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            white-space: nowrap;
+            top: -40px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 12px;
+            z-index: 10;
+        }
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+        .controls button {
+            padding: 10px 15px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background-color 0.2s;
+        }
+        #locateBtn {
+            background-color: #007bff;
+            color: white;
+        }
+        #locateBtn:hover {
+            background-color: #0056b3;
+        }
+        #locateBtn:disabled {
+            background-color: #6c757d;
+            cursor: not-allowed;
+        }
+        #addPointBtn {
+            background-color: #28a745;
+            color: white;
+        }
+        #addPointBtn:hover {
+            background-color: #218838;
+        }
+        #zoomInBtn, #zoomOutBtn {
+            background-color: #6c757d;
+            color: white;
+        }
+        #zoomInBtn:hover, #zoomOutBtn:hover {
+            background-color: #5a6268;
+        }
+        #pointForm {
+            display: none;
+            flex-direction: column;
+            max-width: 300px;
+            gap: 10px;
+        }
+        #pointForm input, #pointForm textarea, #pointForm button {
+            padding: 8px;
+            font-size: 16px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        #pointForm textarea {
+            resize: vertical;
+            min-height: 60px;
+        }
+        #pointForm button[type="submit"] {
+            background-color: #28a745;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
+        #pointForm button[type="submit"]:hover {
+            background-color: #218838;
+        }
+        #pointForm button[type="button"] {
+            background-color: #dc3545;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
+        #pointForm button[type="button"]:hover {
+            background-color: #c82333;
+        }
+        #status {
+            margin-top: 10px;
+            padding: 10px;
+            border-radius: 4px;
+            display: none;
+            font-size: 14px;
+        }
+        .success {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .error {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .loading {
+            background-color: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeaa7;
+        }
+        @media (max-width: 768px) {
+            .controls {
+                flex-direction: column;
+            }
+            #pointForm {
+                max-width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Интерактивная карта</h1>
+        
+        <div class="controls">
+            <button id="locateBtn">📍 Мое местоположение</button>
+            <button id="addPointBtn">➕ Добавить точку</button>
+            <button id="zoomInBtn">➕ Увеличить</button>
+            <button id="zoomOutBtn">➖ Уменьшить</button>
+        </div>
+        
+        <div id="map-container">
+            <div id="map"></div>
+        </div>
+        
+        <form id="pointForm">
+            <h3>Добавление новой точки</h3>
+            <input type="text" id="title" placeholder="Название точки" required>
+            <textarea id="description" placeholder="Описание точки"></textarea>
+            <button type="submit">Сохранить точку</button>
+            <button type="button" id="cancelBtn">Отмена</button>
+        </form>
+        
+        <div id="status"></div>
+    </div>
+
+    <script>
+        // Конфигурация карты
+        const mapContainer = document.getElementById('map-container');
+        const mapDiv = document.getElementById('map');
+        const pointForm = document.getElementById('pointForm');
+        const statusDiv = document.getElementById('status');
+        const locateBtn = document.getElementById('locateBtn');
+        const addPointBtn = document.getElementById('addPointBtn');
+        const cancelBtn = document.getElementById('cancelBtn');
+        const zoomInBtn = document.getElementById('zoomInBtn');
+        const zoomOutBtn = document.getElementById('zoomOutBtn');
+
+        let isAddingPoint = false;
+        let centerLat = 55.7558; // Москва по умолчанию
+        let centerLng = 37.6173;
+        let zoom = 10;
+        const tileSize = 256;
+        let isDragging = false;
+        let startX, startY;
+
+        // Преобразование координат в пиксели
+        function latLngToPixel(lat, lng, zoom, centerLat, centerLng, mapWidth, mapHeight) {
+            const scale = Math.pow(2, zoom);
+            const worldCoordX = ((lng + 180) / 360) * scale * tileSize;
+            const worldCoordY = ((1 - Math.log(Math.tan((lat * Math.PI) / 180) + 1 / Math.cos((lat * Math.PI) / 180)) / Math.PI) / 2) * scale * tileSize;
+            const centerX = ((centerLng + 180) / 360) * scale * tileSize;
+            const centerY = ((1 - Math.log(Math.tan((centerLat * Math.PI) / 180) + 1 / Math.cos((centerLat * Math.PI) / 180)) / Math.PI) / 2) * scale * tileSize;
+            return {
+                x: (worldCoordX - centerX) + (mapWidth / 2),
+                y: (worldCoordY - centerY) + (mapHeight / 2)
+            };
+        }
+
+        // Преобразование пикселей в координаты
+        function pixelToLatLng(x, y, zoom, centerLat, centerLng, mapWidth, mapHeight) {
+            const scale = Math.pow(2, zoom);
+            const centerX = ((centerLng + 180) / 360) * scale * tileSize;
+            const centerY = ((1 - Math.log(Math.tan((centerLat * Math.PI) / 180) + 1 / Math.cos((centerLat * Math.PI) / 180)) / Math.PI) / 2) * scale * tileSize;
+            const worldCoordX = (x - (mapWidth / 2) + centerX) / (scale * tileSize);
+            const worldCoordY = (y - (mapHeight / 2) + centerY) / (scale * tileSize);
+            const lng = (worldCoordX * 360) - 180;
+            const lat = (Math.atan(Math.sinh(Math.PI * (1 - 2 * worldCoordY))) * 180) / Math.PI;
+            return { lat, lng };
+        }
+
+        // Показ статуса
+        function showStatus(message, type = 'success') {
+            statusDiv.textContent = message;
+            statusDiv.className = type;
+            statusDiv.style.display = 'block';
+            setTimeout(() => {
+                statusDiv.style.display = 'none';
+            }, 5000);
+        }
+
+        // Отрисовка карты
+        function renderMap() {
+            const mapWidth = mapContainer.offsetWidth;
+            const mapHeight = mapContainer.offsetHeight;
+            mapDiv.innerHTML = '';
+
+            // Рассчет координат тайлов
+            const scale = Math.pow(2, zoom);
+            const centerX = ((centerLng + 180) / 360) * scale * tileSize;
+            const centerY = ((1 - Math.log(Math.tan((centerLat * Math.PI) / 180) + 1 / Math.cos((centerLat * Math.PI) / 180)) / Math.PI) / 2) * scale * tileSize;
+            const tileX = Math.floor(centerX / tileSize);
+            const tileY = Math.floor(centerY / tileSize);
+
+            // Отрисовка тайлов
+            const tilesPerSide = Math.ceil(Math.max(mapWidth, mapHeight) / tileSize) + 1;
+            for (let i = -tilesPerSide; i <= tilesPerSide; i++) {
+                for (let j = -tilesPerSide; j <= tilesPerSide; j++) {
+                    const x = tileX + i;
+                    const y = tileY + j;
+                    if (y < 0 || y >= Math.pow(2, zoom)) continue;
+
+                    const tile = document.createElement('img');
+                    tile.src = `https://tile.openstreetmap.org/${zoom}/${x}/${y}.png`;
+                    tile.style.position = 'absolute';
+                    tile.style.width = `${tileSize}px`;
+                    tile.style.height = `${tileSize}px`;
+                    tile.style.left = `${(i * tileSize) + (mapWidth / 2) - (centerX % tileSize)}px`;
+                    tile.style.top = `${(j * tileSize) + (mapHeight / 2) - (centerY % tileSize)}px`;
+                    tile.style.pointerEvents = 'none';
+                    mapDiv.appendChild(tile);
+                }
+            }
+
+            // Отрисовка маркеров
+            fetch('/api/points')
+                .then(response => response.json())
+                .then(points => {
+                    points.forEach(point => {
+                        const pos = latLngToPixel(point.lat, point.lng, zoom, centerLat, centerLng, mapWidth, mapHeight);
+                        if (pos.x >= 0 && pos.x <= mapWidth && pos.y >= 0 && pos.y <= mapHeight) {
+                            const marker = document.createElement('div');
+                            marker.className = 'marker';
+                            marker.style.left = `${pos.x}px`;
+                            marker.style.top = `${pos.y}px`;
+                            marker.setAttribute('data-info', point.title);
+                            marker.title = `${point.title}\n${point.description}\nКоординаты: ${point.lat.toFixed(4)}, ${point.lng.toFixed(4)}`;
+                            mapDiv.appendChild(marker);
+                        }
+                    });
+                    showStatus(`Загружено ${points.length} точек`);
+                })
+                .catch(error => {
+                    console.error('Ошибка загрузки точек:', error);
+                    showStatus('Ошибка загрузки точек', 'error');
+                });
+        }
+
+        // Центрирование по геолокации
+        locateBtn.addEventListener('click', () => {
+            if (!navigator.geolocation) {
+                showStatus('Геолокация не поддерживается', 'error');
+                return;
+            }
+
+            locateBtn.disabled = true;
+            locateBtn.textContent = '🔄 Определение...';
+            showStatus('Определяем местоположение...', 'loading');
+
+            navigator.geolocation.getCurrentPosition(
+                (position) => {
+                    centerLat = position.coords.latitude;
+                    centerLng = position.coords.longitude;
+                    zoom = 15; // Увеличиваем зум для геолокации
+                    renderMap();
+
+                    const mapWidth = mapContainer.offsetWidth;
+                    const mapHeight = mapContainer.offsetHeight;
+                    const pos = latLngToPixel(centerLat, centerLng, zoom, centerLat, centerLng, mapWidth, mapHeight);
+                    const marker = document.createElement('div');
+                    marker.className = 'marker';
+                    marker.style.background = 'blue';
+                    marker.style.left = `${pos.x}px`;
+                    marker.style.top = `${pos.y}px`;
+                    marker.setAttribute('data-info', 'Ваше местоположение');
+                    marker.title = `Ваше местоположение\nТочность: ${position.coords.accuracy.toFixed(0)} м`;
+                    mapDiv.appendChild(marker);
+
+                    locateBtn.disabled = false;
+                    locateBtn.textContent = '📍 Мое местоположение';
+                    showStatus('Местоположение определено!');
+                },
+                (error) => {
+                    let errorMessage;
+                    switch(error.code) {
+                        case error.PERMISSION_DENIED:
+                            errorMessage = 'Доступ к геолокации запрещен';
+                            break;
+                        case error.POSITION_UNAVAILABLE:
+                            errorMessage = 'Местоположение недоступно';
+                            break;
+                        case error.TIMEOUT:
+                            errorMessage = 'Время ожидания истекло';
+                            break;
+                        default:
+                            errorMessage = 'Неизвестная ошибка';
+                    }
+                    showStatus(errorMessage, 'error');
+                    locateBtn.disabled = false;
+                    locateBtn.textContent = '📍 Мое местоположение';
+                },
+                {
+                    enableHighAccuracy: true,
+                    timeout: 10000,
+                    maximumAge: 300000
+                }
+            );
+        });
+
+        // Зум
+        zoomInBtn.addEventListener('click', () => {
+            if (zoom < 18) {
+                zoom++;
+                renderMap();
+                showStatus(`Уровень зума: ${zoom}`);
+            }
+        });
+
+        zoomOutBtn.addEventListener('click', () => {
+            if (zoom > 3) {
+                zoom--;
+                renderMap();
+                showStatus(`Уровень зума: ${zoom}`);
+            }
+        });
+
+        // Зум колесом мыши
+        mapContainer.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            if (e.deltaY < 0 && zoom < 18) {
+                zoom++;
+                renderMap();
+                showStatus(`Уровень зума: ${zoom}`);
+            } else if (e.deltaY > 0 && zoom > 3) {
+                zoom--;
+                renderMap();
+                showStatus(`Уровень зума: ${zoom}`);
+            }
+        });
+
+        // Перетаскивание карты
+        mapContainer.addEventListener('mousedown', (e) => {
+            if (isAddingPoint) return;
+            isDragging = true;
+            startX = e.clientX;
+            startY = e.clientY;
+            mapContainer.style.cursor = 'grabbing';
+        });
+
+        mapContainer.addEventListener('mousemove', (e) => {
+            if (!isDragging) return;
+            const mapWidth = mapContainer.offsetWidth;
+            const mapHeight = mapContainer.offsetHeight;
+            const dx = (e.clientX - startX) / (Math.pow(2, zoom) * tileSize) * 360;
+            const dy = (e.clientY - startY) / (Math.pow(2, zoom) * tileSize) * 180;
+            centerLng -= dx;
+            centerLat += (Math.atan(Math.sinh(Math.PI * (1 - 2 * ((1 - Math.log(Math.tan((centerLat * Math.PI) / 180) + 1 / Math.cos((centerLat * Math.PI) / 180)) / Math.PI) / 2 + dy / (Math.pow(2, zoom) * tileSize))))) * 180) / Math.PI - centerLat;
+            startX = e.clientX;
+            startY = e.clientY;
+            renderMap();
+        });
+
+        mapContainer.addEventListener('mouseup', () => {
+            isDragging = false;
+            mapContainer.style.cursor = isAddingPoint ? 'crosshair' : 'grab';
+        });
+
+        mapContainer.addEventListener('mouseleave', () => {
+            isDragging = false;
+            mapContainer.style.cursor = isAddingPoint ? 'crosshair' : 'grab';
+        });
+
+        // Добавление точки
+        addPointBtn.addEventListener('click', () => {
+            pointForm.style.display = 'block';
+            addPointBtn.style.display = 'none';
+            isAddingPoint = true;
+            mapContainer.style.cursor = 'crosshair';
+            showStatus('Заполните форму и кликните на карте');
+        });
+
+        // Отмена добавления
+        cancelBtn.addEventListener('click', () => {
+            pointForm.style.display = 'none';
+            addPointBtn.style.display = 'block';
+            isAddingPoint = false;
+            mapContainer.style.cursor = 'grab';
+            pointForm.reset();
+            showStatus('Добавление отменено');
+        });
+
+        // Обработка клика по карте
+        mapContainer.addEventListener('click', (e) => {
+            if (!isAddingPoint) return;
+
+            const rect = mapContainer.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            const mapWidth = mapContainer.offsetWidth;
+            const mapHeight = mapContainer.offsetHeight;
+            const coords = pixelToLatLng(x, y, zoom, centerLat, centerLng, mapWidth, mapHeight);
+            const title = document.getElementById('title').value.trim();
+            const description = document.getElementById('description').value.trim();
+
+            if (!title) {
+                showStatus('Введите название точки', 'error');
+                return;
+            }
+
+            const point = { lat: coords.lat, lng: coords.lng, title, description };
+
+            fetch('/api/points', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(point)
+            })
+            .then(response => {
+                if (!response.ok) throw new Error('Ошибка сервера');
+                return response.json();
+            })
+            .then(data => {
+                const pos = latLngToPixel(data.lat, data.lng, zoom, centerLat, centerLng, mapWidth, mapHeight);
+                const marker = document.createElement('div');
+                marker.className = 'marker';
+                marker.style.left = `${pos.x}px`;
+                marker.style.top = `${pos.y}px`;
+                marker.setAttribute('data-info', data.title);
+                marker.title = `${data.title}\n${data.description}\nКоординаты: ${data.lat.toFixed(4)}, ${data.lng.toFixed(4)}`;
+                mapDiv.appendChild(marker);
+
+                pointForm.reset();
+                pointForm.style.display = 'none';
+                addPointBtn.style.display = 'block';
+                isAddingPoint = false;
+                mapContainer.style.cursor = 'grab';
+                showStatus('Точка добавлена!');
+            })
+            .catch(error => {
+                console.error('Ошибка:', error);
+                showStatus('Ошибка при сохранении точки', 'error');
+            });
+        });
+
+        // Начальная загрузка карты
+        window.addEventListener('load', renderMap);
+
+        // Обработка изменения размера окна
+        window.addEventListener('resize', renderMap);
+
+        // Обработка статуса сети
+        window.addEventListener('online', () => {
+            showStatus('Соединение восстановлено', 'success');
+            renderMap();
+        });
+
+        window.addEventListener('offline', () => {
+            showStatus('Потеряно соединение', 'error');
+        });
+    </script>
+</body>
+</html>
